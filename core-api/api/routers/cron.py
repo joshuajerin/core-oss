@@ -1222,6 +1222,44 @@ async def cron_health():
                 "name": "agent-health",
                 "schedule": "Every 5 minutes",
                 "description": "Verifies running agent E2B sandboxes are healthy"
+            },
+            {
+                "name": "cleanup-deleted-accounts",
+                "schedule": "Daily at 3:00 AM UTC",
+                "description": "Hard-deletes accounts past the 30-day grace period (GDPR)"
             }
         ]
     }
+
+
+@router.get("/api/cron/cleanup-deleted-accounts")
+async def cron_cleanup_deleted_accounts(
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Hard-delete user accounts that have been pending deletion for 30+ days.
+    GDPR Article 17 - Right to erasure.
+    """
+    from api.services.users.account_deletion import hard_delete_user
+
+    supabase = get_service_role_client()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    try:
+        result = supabase.table("users").select("id").lt("pending_deletion_at", cutoff).execute()
+        users_to_delete = result.data or []
+
+        deleted_count = 0
+        for user_row in users_to_delete:
+            try:
+                await hard_delete_user(user_row["id"])
+                deleted_count += 1
+            except Exception as e:
+                logger.error(f"Failed to hard-delete user {user_row['id']}: {e}")
+
+        logger.info(f"GDPR cleanup: hard-deleted {deleted_count}/{len(users_to_delete)} accounts")
+        return {"status": "ok", "deleted": deleted_count, "total_eligible": len(users_to_delete)}
+
+    except Exception as e:
+        logger.error(f"GDPR cleanup cron failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

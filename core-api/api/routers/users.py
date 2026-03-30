@@ -1,14 +1,22 @@
 """
 User profile router - endpoints for user profile management including avatar upload
+and GDPR compliance (data export, account deletion).
 """
+import json
+import io
+import zipfile
 from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 from api.dependencies import get_current_user_jwt, get_current_user_id
 from api.exceptions import handle_api_exception
 from api.config import settings
+from api.schemas import MessageResponse
 from lib.r2_client import get_r2_client
 from lib.supabase_client import get_service_role_client
+from api.services.users.data_export import collect_user_data
+from api.services.users.account_deletion import request_account_deletion, cancel_account_deletion
 import logging
 
 logger = logging.getLogger(__name__)
@@ -280,3 +288,96 @@ async def delete_avatar(
 
     except Exception as e:
         handle_api_exception(e, "Failed to delete avatar", logger)
+
+
+# ==============================================================================
+# GDPR Compliance Endpoints
+# ==============================================================================
+
+
+class DeletionStatusResponse(BaseModel):
+    """Response for account deletion status."""
+    pending_deletion_at: Optional[str] = None
+    message: str
+
+
+@router.post("/me/export")
+async def export_user_data(
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """
+    Export all user data as a ZIP file containing JSON files per table.
+
+    GDPR Article 20 - Right to data portability.
+    Sensitive fields (OAuth tokens) are redacted.
+    """
+    try:
+        data = await collect_user_data(current_user_id)
+
+        # Build ZIP in memory
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for table_name, rows in data.items():
+                content = json.dumps(rows, indent=2, default=str)
+                zf.writestr(f"{table_name}.json", content)
+
+            # Add metadata
+            metadata = {
+                "user_id": current_user_id,
+                "export_format": "json",
+                "tables_included": list(data.keys()),
+                "row_counts": {k: len(v) for k, v in data.items()},
+            }
+            zf.writestr("_metadata.json", json.dumps(metadata, indent=2))
+
+        buffer.seek(0)
+
+        logger.info(f"Data export completed for user {current_user_id}")
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="core-data-export-{current_user_id[:8]}.zip"'
+            },
+        )
+    except Exception as e:
+        handle_api_exception(e, "Failed to export user data", logger)
+
+
+@router.delete("/me", response_model=DeletionStatusResponse)
+async def delete_account(
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """
+    Request account deletion with a 30-day grace period.
+
+    GDPR Article 17 - Right to erasure.
+    The account is soft-deleted immediately. After 30 days, all data
+    is permanently removed by a scheduled cleanup job.
+    Call POST /api/users/me/cancel-deletion to cancel during the grace period.
+    """
+    try:
+        result = await request_account_deletion(current_user_id)
+        return DeletionStatusResponse(
+            pending_deletion_at=result["pending_deletion_at"],
+            message="Account scheduled for deletion. You have 30 days to cancel.",
+        )
+    except Exception as e:
+        handle_api_exception(e, "Failed to request account deletion", logger)
+
+
+@router.post("/me/cancel-deletion", response_model=MessageResponse)
+async def cancel_deletion(
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """
+    Cancel a pending account deletion.
+
+    Must be called within the 30-day grace period.
+    """
+    try:
+        await cancel_account_deletion(current_user_id)
+        return MessageResponse(message="Account deletion cancelled.")
+    except Exception as e:
+        handle_api_exception(e, "Failed to cancel account deletion", logger)
