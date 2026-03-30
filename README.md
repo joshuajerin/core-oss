@@ -81,6 +81,25 @@ npm run dev
 # App runs at http://localhost:5173
 ```
 
+### Docker (Alternative)
+
+If you prefer Docker, start both services with a single command:
+
+```bash
+# Copy env files first
+cp core-api/.env.example core-api/.env
+cp core-web/.env.example core-web/.env
+# Edit both .env files with your Supabase credentials
+
+# Start everything
+make dev
+# Or: docker compose up
+
+# API at http://localhost:8000, Web at http://localhost:3000
+```
+
+Source code is volume-mounted for hot-reload during development.
+
 ## Architecture
 
 ```

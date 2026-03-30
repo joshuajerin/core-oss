@@ -1,0 +1,36 @@
+services:
+  api:
+    build:
+      context: ./core-api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./core-api:/app
+      - /app/__pycache__
+      - /app/.venv
+    env_file:
+      - ./core-api/.env
+    environment:
+      - API_ENV=development
+      - DEBUG=true
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./core-web
+      dockerfile: Dockerfile
+      args:
+        HUGEICONS_TOKEN: ${HUGEICONS_TOKEN:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./core-web/src:/app/src
+      - ./core-web/public:/app/public
+      - ./core-web/index.html:/app/index.html
+      - ./core-web/vite.config.ts:/app/vite.config.ts
+    env_file:
+      - ./core-web/.env
+    depends_on:
+      - api
+    restart: unless-stopped
