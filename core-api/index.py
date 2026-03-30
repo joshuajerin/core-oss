@@ -11,15 +11,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sentry_sdk
 import time
+import uuid
 import logging
 import traceback
+from contextvars import ContextVar
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from datetime import datetime
 from api.config import settings
 from api.schemas import HealthResponse, StatusResponse
 from lib.supabase_client import start_supabase_request_scope, reset_supabase_request_scope
+
+# Per-request ID for error attribution and debugging
+_request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +68,42 @@ app.add_middleware(SlowAPIMiddleware)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+def _get_request_id() -> str | None:
+    return _request_id_ctx.get(None)
+
+
+# HTTP exception handler — wraps all HTTPException responses in the standard envelope
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": _status_to_error_code(exc.status_code),
+            "message": exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+            "request_id": _get_request_id(),
+        },
+    )
+
+
+# Validation error handler — wraps 422 responses in the standard envelope
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    details = [
+        {"field": " -> ".join(str(loc) for loc in err["loc"]), "message": err["msg"]}
+        for err in exc.errors()
+    ]
+    messages = [d["message"] for d in details]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": ", ".join(messages) if messages else "Validation error",
+            "details": details,
+            "request_id": _get_request_id(),
+        },
+    )
+
+
 # Global exception handler for unhandled exceptions
 # This ensures CORS headers are included even on 500 errors
 @app.exception_handler(Exception)
@@ -88,10 +130,24 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={
-            "detail": "Internal server error",
-            "error_type": type(exc).__name__,
+            "error": "internal_error",
+            "message": "Internal server error",
+            "request_id": _get_request_id(),
         }
     )
+
+
+def _status_to_error_code(status_code: int) -> str:
+    """Map HTTP status codes to machine-readable error codes."""
+    return {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        409: "conflict",
+        422: "validation_error",
+        429: "rate_limited",
+    }.get(status_code, f"http_{status_code}")
 
 
 # CORS
@@ -129,9 +185,12 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# Request timing middleware for performance monitoring
+# Request timing + request ID middleware for performance monitoring and debugging
 @app.middleware("http")
 async def timing_middleware(request: Request, call_next):
+    # Generate a unique request ID for tracing
+    request_id = uuid.uuid4().hex[:16]
+    token = _request_id_ctx.set(request_id)
     start_time = time.perf_counter()
 
     try:
@@ -140,18 +199,21 @@ async def timing_middleware(request: Request, call_next):
         # Log timing even for failed requests
         process_time_ms = (time.perf_counter() - start_time) * 1000
         logger.error(
-            f"[PERF] {request.method} {request.url.path} - {process_time_ms:.2f}ms - EXCEPTION: {type(exc).__name__}"
+            f"[PERF] {request.method} {request.url.path} - {process_time_ms:.2f}ms - EXCEPTION: {type(exc).__name__} - rid={request_id}"
         )
         raise
+    finally:
+        _request_id_ctx.reset(token)
 
     process_time_ms = (time.perf_counter() - start_time) * 1000
 
-    # Add timing to response headers
+    # Add timing and request ID to response headers
     response.headers["X-Process-Time-Ms"] = f"{process_time_ms:.2f}"
+    response.headers["X-Request-Id"] = request_id
 
     # Log the request timing
     logger.info(
-        f"[PERF] {request.method} {request.url.path} - {process_time_ms:.2f}ms - Status: {response.status_code}"
+        f"[PERF] {request.method} {request.url.path} - {process_time_ms:.2f}ms - Status: {response.status_code} - rid={request_id}"
     )
 
     return response

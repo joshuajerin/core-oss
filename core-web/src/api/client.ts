@@ -114,11 +114,19 @@ export async function api<T>(
 
   if (!response.ok) {
     // Try to extract error detail from response
+    // Supports both the new ErrorEnvelope format {error, message, details, request_id}
+    // and the legacy FastAPI format {detail: string | array}
     let errorMessage = `API error: ${response.status}`;
+    let requestId: string | undefined;
     try {
       const errorData = await response.json();
-      if (errorData.detail) {
-        // Handle FastAPI validation errors (array of objects)
+      // New ErrorEnvelope format (preferred)
+      if (errorData.message && errorData.error) {
+        errorMessage = errorData.message;
+        requestId = errorData.request_id;
+      }
+      // Legacy FastAPI format
+      else if (errorData.detail) {
         if (Array.isArray(errorData.detail)) {
           errorMessage = errorData.detail
             .map((err: { msg?: string; message?: string }) => err.msg || err.message || JSON.stringify(err))
@@ -134,10 +142,11 @@ export async function api<T>(
     } catch {
       // Ignore JSON parse errors
     }
-    const error = new Error(errorMessage) as Error & { status?: number };
+    const error = new Error(errorMessage) as Error & { status?: number; requestId?: string };
     error.status = response.status;
+    error.requestId = requestId;
     if (response.status >= 500) {
-      captureException(error, { endpoint, status: response.status, method: options.method ?? 'GET' });
+      captureException(error, { endpoint, status: response.status, method: options.method ?? 'GET', requestId });
     }
     throw error;
   }
