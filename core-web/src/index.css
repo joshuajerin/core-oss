@@ -50,6 +50,9 @@ p {
   --color-bg-mini-app: #EAEAEA;
   --color-bg-dark: #000000;
   --color-bg-black: #000000;
+  --color-bg-code: #1e1e1e;
+  --color-bg-code-header: #2d2d2d;
+  --color-bg-muted: #F7F8FA;
 
   /* Border */
   --color-border-light: #EAEAEA;

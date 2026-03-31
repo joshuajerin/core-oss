@@ -160,7 +160,7 @@ export default function TimelineGrid({
         ref={scrollRef}
         id="calendar-scroll-container"
         className="flex-1 overflow-y-auto overflow-x-hidden"
-        style={{ backgroundColor: '#FCFCFC' }}
+        style={{ backgroundColor: 'var(--color-bg-light)' }}
       >
         <div
           ref={containerRef}

@@ -273,7 +273,7 @@ export default function DraggableEventBlock({
       )}
       style={{
         ...style,
-        backgroundColor: isOutlined ? '#FFFFFF' : palette.bg,
+        backgroundColor: isOutlined ? 'var(--color-bg-white)' : palette.bg,
         border: isOutlined ? `1px solid ${palette.accent}40` : undefined,
         // @ts-expect-error CSS custom property for focus ring
         '--tw-ring-color': `${palette.accent}66`,
@@ -422,7 +422,7 @@ export function EventBlockOverlay({
         height: height || "auto",
         minHeight: 30,
         boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
-        backgroundColor: isOutlined ? '#FFFFFFcc' : `${palette.bg}cc`,
+        backgroundColor: isOutlined ? 'rgba(255, 255, 255, 0.8)' : `${palette.bg}cc`,
         borderColor: palette.accent,
       }}
     >

@@ -18,7 +18,7 @@ export default function OnboardingProgress({ currentStep }: OnboardingProgressPr
           className="h-1.5 rounded-full"
           initial={false}
           animate={{
-            backgroundColor: i <= activeIndex ? "#000000" : "#E7E7E6",
+            backgroundColor: i <= activeIndex ? "var(--color-brand-primary)" : "var(--color-gray-100)",
             width: 32,
           }}
           transition={{ duration: 0.3 }}
